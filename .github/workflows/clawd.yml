@@ -1,0 +1,85 @@
+name: Clawd 蹲点
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # 每 5 分钟检查一次
+    - cron: '17 3 * * *'    # 每天一次心跳，防止 60 天无提交被 GitHub 停掉
+  workflow_dispatch:
+    inputs:
+      test:
+        description: '发一条测试推送'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  # 要蹲的品项，用空格隔开；领到哪个就把哪个删掉，就不会再为它响了
+  WATCH: "plushie stickers boo"
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: 检查状态并推送
+        env:
+          BARK_URL: ${{ secrets.BARK_URL }}
+          TEST: ${{ inputs.test }}
+        run: |
+          BARK="${BARK_URL%/}"
+          enc() { printf %s "$1" | jq -sRr @uri; }
+          push() {
+            curl -sS --max-time 15 --get "$BARK/$(enc "$1")/$(enc "$2")" \
+              --data-urlencode "level=critical" \
+              --data-urlencode "sound=alarm" \
+              --data-urlencode "volume=10" \
+              --data-urlencode "url=https://claude.dev/terminal/" > /dev/null
+          }
+          label() {
+            case "$1" in
+              plushie)  echo "玩偶（输入 /plushies）" ;;
+              stickers) echo "贴纸（输入 /stickers）" ;;
+              boo)      echo "boo（指令未知，先试 /boo）" ;;
+              *)        echo "$1" ;;
+            esac
+          }
+
+          if [ "${TEST:-false}" = "true" ]; then
+            push "🦀 测试推送" "蹲点工具工作正常，正在蹲：$WATCH"
+            exit 0
+          fi
+
+          json=$(curl -fsS --max-time 15 https://claude.dev/terminal/swag-status.json) \
+            || { echo "取不到状态，跳过"; exit 0; }
+          echo "当前状态: $json"
+
+          echo "$json" | jq -e '.off | type == "array"' > /dev/null \
+            || { echo "格式变了，跳过"; exit 0; }
+
+          opened=""
+          for item in $WATCH; do
+            if echo "$json" | jq -e --arg i "$item" '.off | index($i) == null' > /dev/null; then
+              opened="$opened$(label "$item")；"
+            fi
+          done
+
+          if [ -n "$opened" ]; then
+            push "🦀 Clawd 周边开放了！" "马上打开 claude.dev/terminal：$opened"
+          else
+            echo "蹲的品项都还关闭着：$WATCH"
+          fi
+
+  heartbeat:
+    if: github.event.schedule == '17 3 * * *'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 写心跳
+        run: |
+          date -u > HEARTBEAT.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898699+github-actions[bot]@users.noreply.github.com"
+          git add HEARTBEAT.txt
+          git commit -m "heartbeat" && git push
